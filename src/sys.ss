@@ -30,8 +30,17 @@
            [(name #:path)
             #'(find-executable filename)]
            [(name arg (... ...))
-            #'(let ([cmd (++ #:separator " " (find-executable filename) arg (... ...))])
+            #'(let ([cmd (apply ++ #:separator " " (find-executable filename) (map to-shell-arg `(arg (... ...))))])
                 (system cmd))]
            ))]))
 
-(include "sys-tests.ss")
+(define (to-shell-arg arg)
+  (match arg
+    (`(escape ,arg) (format "~s" arg))
+    (-i  "-i")
+    (else arg)))
+
+;(provide (for-syntax define-shell-command))
+    
+
+(include "tests/sys-test.ss")

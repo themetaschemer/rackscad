@@ -10,9 +10,9 @@
 
 
 (struct/provide point (x y z) #:transparent)
+(struct/provide 2d-point (x y) #:transparent)
 (struct/provide edge (from to) #:transparent)
 (struct/provide face (points) #:transparent)
-(define/provide (2d-point x y) (point x y 0))
 
 ;;-------------------------------------------------------------------------------------------
 ;; 2d objects
@@ -68,15 +68,15 @@
 (struct/provide rotate-extrude-transform (objects angle convexity) #:transparent)
 (define/provide (linear-extrude-with-args objs
                                           #:height height
-                                          #:center center
-                                          #:convexity convexity
-                                          #:twist twist
-                                          #:slices slices
-                                          #:scale scale)
+                                          #:center [center #f]
+                                          #:convexity [convexity 10]
+                                          #:twist [twist 0]
+                                          #:slices [slices 20]
+                                          #:scale [scale 1.0])
   (linear-extrude-transform objs height center convexity twist slices scale))
 (define/provide (rotate-extrude-with-args objs
-                                          #:angle angle
-                                          #:convexity convexity)
+                                          #:angle [angle 360]
+                                          #:convexity [convexity 10])
   (rotate-extrude-transform objs angle convexity))
 (define/provide (extrude? x) (or (linear-extrude-transform? x) (rotate-extrude-transform? x)))
 
@@ -98,4 +98,4 @@
 (struct/provide set-operation-object (op objects) #:transparent)
 (define/provide set-operation? set-operation-object?)
 
-(include "parse-tree-test.ss")
+(include "tests/parse-tree-test.ss")

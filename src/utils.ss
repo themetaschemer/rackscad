@@ -63,5 +63,5 @@
     [(_ #:output-file port)
      #'(close-output-port port)]))
 
-(include "utils-test.ss")
+(include "tests/utils-test.ss")
 (provide (all-defined-out))

@@ -1,1 +1,3 @@
-# rackscad
+Rackscad
+========
+README text here.

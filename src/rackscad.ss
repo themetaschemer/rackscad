@@ -6,27 +6,40 @@
 (require "sys.ss")
 (require "compile.ss")
 (require (for-syntax racket/base))
+(require rackunit)
+(require racket/include)
 
 ;;-------------------------------------------------------------------------------------------
 ;; Programming interface
 ;;-------------------------------------------------------------------------------------------
 
-(define/provide (compile target-filename objs ...)
+(define/provide (compile target-filename . objs)
   (with-ports ([target-port #:output-file target-filename #:exists 'truncate])
-     ((compile-expr (list objs ...)) target-port "")))
+     (display ((compile-expr objs) "") target-port)))
 
-(define/provide (render filename)
+
+(define/provide (render-png filename 
+                            #:camera-at eye
+                            #:look-at center 
+                            #:png-width w
+                            #:png-height h
+                            #:high-def [high-def-render #f])
   (define-shell-command !openscad "openscad")
-  (!openscad filename))
+  (!openscad ,filename -o ,(path-replace-suffix filename ".png")
+             ,(++ "--camera=" (point-x eye)    "," (point-y eye)    "," (point-z eye)
+                  ","         (point-x center) "," (point-y center) "," (point-z center))
+             ,@(if high-def-render '(--render) '())))
 
 ;;-------------------------------------------------------------------------------------------
 ;; Grouping
 ;;-------------------------------------------------------------------------------------------
+
 (define/provide (objects . objs) objs)
 
 ;;-------------------------------------------------------------------------------------------
 ;; Set operations
 ;;-------------------------------------------------------------------------------------------
+
 (define/provide (union . objs)
   (set-operation-object 'union objs))
 
@@ -46,7 +59,6 @@
 ;; File readers
 ;;-------------------------------------------------------------------------------------------
 
-
 (define-syntax/provide (import x)
   (syntax-case x ()
     [(_ file)
@@ -55,22 +67,25 @@
 
 (define-syntax/provide (height-map x)
   (syntax-case x ()
-    [(_ (args ...) file objs ...)
-     #'(height-map-with-args  file (list objs ...) args ...)]))
+    [(_ file args-and-objs ...)
+     (let-values ([(args objs) (split-args-and-objs (syntax->datum #'(args-and-objs ...)))])
+       (with-syntax ([(args ...) (datum->syntax #'(args-and-objs ...) args)]
+                     [(objs ...) (datum->syntax #'(args-and-objs ...) objs)])
+         #'(height-map-with-args  file (list objs ...) args ...)))]))
+     
 
 ;;-------------------------------------------------------------------------------------------
 ;; scope
 ;;-------------------------------------------------------------------------------------------
 
-(define-syntax/provide (render-with x)
+(define-syntax/provide (smoothness x)
   (syntax-case x ()
     [(_ ([var val] ...) body ...)
-     (let ([vars (map syntax->datum (syntax->datum #'(var ...)))])
+     (let ([vars (syntax->datum #'(var ...))])
        (equal? (remove* '(minimum-angle minimum-size number-of-fragments) vars) '()))
-     (with-syntax ([(vname ...) (map get-vname (map syntax->datum (syntax->datum #'(var ...))))])
-       #'(parameters-transform `(('vname ,val) ...)
+     (with-syntax ([(vname ...) (map get-vname (syntax->datum #'(var ...)))])
+       #'(parameters-transform `((vname ,val) ...)
                                (list body ...)))]))
-
 
 ;;-------------------------------------------------------------------------------------------
 ;; projection objects
@@ -89,10 +104,32 @@
 
 (define-syntax/provide (extrude x)
   (syntax-case x ()
-    [(_ #:linear (args ...) objs ...)
-     #'(linear-extrude-with-args (list objs ...) args ...)]
-    [(_ #:rotational (args ...) objs ...)
-     #'(rotate-extrude-with-args (list objs ...) args ...)]))
+    [(_ #:linear args-and-objs ...)
+     (let-values ([(args objs) (split-args-and-objs (syntax->datum #'(args-and-objs ...)))])
+       (with-syntax ([(args ...) (datum->syntax #'(args-and-objs ...) args)]
+                     [(objs ...) (datum->syntax #'(args-and-objs ...) objs)])
+         #'(linear-extrude-with-args (list objs ...) args ...)))]
+    [(_ #:rotate args-and-objs ...)
+     (let-values ([(args objs) (split-args-and-objs (syntax->datum #'(args-and-objs ...)))])
+       (with-syntax ([(args ...) (datum->syntax #'(args-and-objs ...) args)]
+                     [(objs ...) (datum->syntax #'(args-and-objs ...) objs)])
+         #'(rotate-extrude-with-args (list objs ...) args ...)))]
+    [(_ args-and-objs ...)
+     (let-values ([(args objs) (split-args-and-objs (syntax->datum #'(args-and-objs ...)))])
+       (with-syntax ([(args ...) (datum->syntax #'(args-and-objs ...) args)]
+                     [(objs ...) (datum->syntax #'(args-and-objs ...) objs)])
+         #'(linear-extrude-with-args (list objs ...) args ...)))]))
+
+(define-for-syntax (split-args-and-objs args-and-objs)
+  (let-values ([(args objs ignore)
+                (for/fold ([args '()]
+                           [objs '()]
+                           [next-is-arg #f]) ([s args-and-objs])
+                  (cond
+                   (next-is-arg  (values (cons s args) objs #f))
+                   ((keyword? s) (values (cons s args) objs #t))
+                   (else         (values args (cons s objs) #f))))])
+    (values (reverse args) (reverse objs))))
 
 ;;-------------------------------------------------------------------------------------------
 ;; Transform objects
@@ -125,20 +162,18 @@
 
 (define-syntax/provide (color x)
   (syntax-case x ()
-    [(_ (r g b a) objs ...)
+    [(_ #:rgba (r g b a) objs ...)
      #'(basic-color-transform r g b a (list objs ...))]
-    [(_ (color-name alpha) objs ...)
-     (string? (syntax->datum #'color-name))
+    [(_ #:name color-name #:alpha alpha objs ...)
      #'(let ([rgb (color-name->rgb color-name)])
          (when (not rgb)
                (error 'color "Unknown color name: ~a~%" color-name))
-         (apply (λ (r g b) (basic-color-transform r g b alpha (list objs ...))) rgb))]
-    [(_ color-name objs ...)
-     (string? (syntax->datum #'color-name))
+         (apply (λ (r g b) (basic-color-transform (/ r 255) (/ g 255) (/ b 255) alpha (list objs ...))) rgb))]
+    [(_ #:name color-name objs ...)
      #'(let ([rgb (color-name->rgb color-name)])
          (when (not rgb)
                (error 'color "Unknown color name: ~a~%" color-name))
-         (apply (λ (r g b) (basic-color-transform r g b 1.0 (list objs ...))) rgb))]))
+         (apply (λ (r g b) (basic-color-transform (/ r 255) (/ g 255) (/ b 255) 1.0 (list objs ...))) rgb))]))
 
 (define-syntax/provide (offset x)
   (syntax-case x ()
@@ -155,7 +190,6 @@
   (syntax-case x ()
     [(_ matrix objs ...)
      #'(affine-transform matrix (list objs ...))]))
-  
 
 ;;-------------------------------------------------------------------------------------------
 ;; Basic 2d objects
@@ -167,10 +201,10 @@
    [r (circle-object (* 2 r))]
    [d (circle-object d)]))
 
-(define/provide (rectangle x y #:center [center #f])
+(define/provide (rectangle #:x x #:y y #:center [center #f])
   (rectangle-object x y center))
 
-(define/provide (square x #:center [center #f])
+(define/provide (square #:side x #:center [center #f])
   (rectangle-object x x center))
 
 (define/provide (polygon #:points points  #:paths [paths #f])
@@ -188,7 +222,6 @@
                  #:script [script "latin"])    ;; script of the text
   (text-object string size font halign valign spacing direction language script))
 
-
 ;;-------------------------------------------------------------------------------------------
 ;; Basic 3d objects
 ;;-------------------------------------------------------------------------------------------
@@ -199,10 +232,10 @@
    [r (sphere-object (* 2 r))]
    [d (sphere-object d)]))
 
-(define/provide (cuboid #:width w #:depth d #:height h #:center center)
-  (cuboid-object w d h center))
+(define/provide (cuboid #:x x #:y y #:z z #:center [center #f])
+  (cuboid-object x y z center))
 
-(define/provide (cube #:side s #:center center)
+(define/provide (cube #:side s #:center [center #f])
   (cuboid-object s s s center))
 
 (define/provide (conic #:height h 
@@ -236,8 +269,13 @@
   (andmap point? points))
 
 (define (ensure-faces-have-points faces points)
-  (for/fold ([ans #t]) ([face faces])
-    (andmap (λ (face-point) (member face-point points)) (face-points face))))
+  (let ([n (length points)])
+    (for/fold ([ans #t]) ([face faces])
+      (and ans
+           (andmap (λ (face-point) (and (integer? face-point) 
+                                        (>= face-point 0)
+                                        (< face-point n)))
+                   (face-points face))))))
 
 (define-for-syntax (get-vname var)
   (case var
@@ -248,3 +286,7 @@
 
        
 
+;;-------------------------------------------------------------------------------------------
+(include "tests/rackscad-test.ss")
+
+(provide point 2d-point edge face)
